@@ -1,7 +1,8 @@
-# SimpleCDRipper
+SimpleCDRipper
+
 This is a simple and fast utility to RIP your CD collection to lossless or lossy formats. Uses MusicBrainz and pulls in cover art while ripping. Allows adding in info for unknown/bootleg CDs during RIP if they're not in MusicBrainz. It's designed to create high-quality, archival-grade digital copies of your music collection, complete with detailed metadata, cover art, and a verification log.
 
-The script automates the entire process, from looking up album information online to tagging the files and organizing them into a clean directory structure (Artist/Album/Track.ext).
+### The script automates the entire process, from looking up album information online to tagging the files and organizing them into a clean directory structure (Artist/Album/Track.ext).
 Features
 
 - Multiple Formats: Rip to FLAC (lossless), WAV (uncompressed), MP3 (320kbps), or OGG (~500kbps).
@@ -22,11 +23,11 @@ Features
 
 - Auto-Eject: Ejects the CD tray upon successful completion.
 
-Dependencies
+## Dependencies
 
 To use all features of this script, you will need to have the following command-line tools installed on your Linux system. You can typically install them using your distribution's package manager (e.g., apt, dnf, zypper, pacman).
 
-Core Dependencies:
+### Core Dependencies:
 
 - cdparanoia: For securely ripping audio from the CD.
 
@@ -38,7 +39,7 @@ Core Dependencies:
 
 - eject: For ejecting the CD tray.
 
-Format-Specific Dependencies:
+### Format-Specific Dependencies:
 
 - flac: Required for ripping to FLAC format.
 
@@ -48,7 +49,7 @@ Format-Specific Dependencies:
 
 - oggenc: Required for ripping to OGG (Vorbis) format.
 
-Usage
+### Usage
 
 - Save the script to a file (e.g., SimpleCDRipper.sh).
 
@@ -57,7 +58,8 @@ Usage
 - Run it from your terminal: ./SimpleCDRipper.sh
 
 The script will then guide you through the process.
-Handling Unknown Discs
+
+# Handling Unknown Discs
 
 If you insert a CD that cannot be found in the MusicBrainz database, the script will not fail. Instead, it will fall back to a manual entry mode. It will prompt you for the following information before it begins ripping:
 
@@ -70,5 +72,7 @@ If you insert a CD that cannot be found in the MusicBrainz database, the script 
 - Genre
 
 - Title for each track, one by one.
+
+- Disc Number (If part of set)
 
 Once you have provided this information, the script will proceed with the rip, tagging, and file organization just as it would with automatically fetched data.
