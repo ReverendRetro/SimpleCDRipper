@@ -10,7 +10,7 @@
 #                and lame/oggenc for MP3/OGG.
 #        AUTHOR: ReverendRetro
 #       CREATED: 2025-08-10
-#      REVISION: 3.6
+#      REVISION: 3.7
 #==============================================================================
 
 # Ensure CD_DEVICE is what your CD drive is
@@ -18,7 +18,7 @@
 # --- Configuration ---
 # Set to "true" to see detailed debugging output
 VERBOSE="false"
-SCRIPT_REVISION="3.6"
+SCRIPT_REVISION="3.7"
 CD_DEVICE="/dev/sr0"
 
 # --- Functions ---
@@ -142,6 +142,7 @@ COVER_ART_FILE=""
 COVER_ART_STATUS="No"
 GENRE=""
 DISC_SUBDIR=""
+METADATA_SOURCE="Manual" # Default to manual, change if found
 
 # Check if the API call was successful and found any releases
 if [ "$HTTP_STATUS" -eq 200 ] && [ -s /tmp/musicbrainz_response.json ] && [ "$(jq '.releases | length' /tmp/musicbrainz_response.json 2>/dev/null)" -gt 0 ]; then
@@ -150,19 +151,27 @@ if [ "$HTTP_STATUS" -eq 200 ] && [ -s /tmp/musicbrainz_response.json ] && [ "$(j
 
     if [ "$RELEASE_COUNT" -gt 1 ]; then
         echo "Found multiple matching releases. Please choose the correct one:"
+        echo "  0) None of these - Enter manually"
         jq -r '.releases[] | "\(.|."artist-credit"[0].name) - \(.title)"' /tmp/musicbrainz_response.json | nl -w2 -s'. '
         
         while true; do
-            read -p "Enter the number of the correct release (1-$RELEASE_COUNT): " SELECTION
-            if [[ "$SELECTION" =~ ^[0-9]+$ ]] && [ "$SELECTION" -ge 1 ] && [ "$SELECTION" -le "$RELEASE_COUNT" ]; then
-                SELECTED_INDEX=$((SELECTION - 1))
+            read -p "Enter your choice (0-$RELEASE_COUNT): " SELECTION
+            if [[ "$SELECTION" =~ ^[0-9]+$ ]] && [ "$SELECTION" -ge 0 ] && [ "$SELECTION" -le "$RELEASE_COUNT" ]; then
+                if [ "$SELECTION" -ne 0 ]; then
+                    SELECTED_INDEX=$((SELECTION - 1))
+                    METADATA_SOURCE="MusicBrainz"
+                fi
                 break
             else
                 echo "Invalid selection. Please try again."
             fi
         done
+    else
+        METADATA_SOURCE="MusicBrainz"
     fi
-    
+fi
+
+if [ "$METADATA_SOURCE" == "MusicBrainz" ]; then
     echo "Metadata found on MusicBrainz!"
     
     ALBUM_ARTIST=$(jq -r --argjson idx "$SELECTED_INDEX" '.releases[$idx]."artist-credit"[0].name' /tmp/musicbrainz_response.json)
@@ -267,7 +276,7 @@ CUE_FILE="$OUTPUT_DIR/$SAFE_ALBUM_TITLE.cue"
     echo "Rip started on: $(date)"
     echo "Ripped with script version: $SCRIPT_REVISION"
     echo "Output Format: ${ENCODER^^}"
-    if [ -n "$RELEASE_URL" ]; then
+    if [ "$METADATA_SOURCE" == "MusicBrainz" ]; then
         echo "MusicBrainz Release URL: $RELEASE_URL"
     else
         echo "Metadata entered manually."
