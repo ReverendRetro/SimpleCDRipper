@@ -10,7 +10,7 @@
 #                and lame/oggenc for MP3/OGG.
 #        AUTHOR: ReverendRetro
 #       CREATED: 2025-08-10
-#      REVISION: 3.7
+#      REVISION: 4.0
 #==============================================================================
 
 # Ensure CD_DEVICE is what your CD drive is
@@ -18,7 +18,7 @@
 # --- Configuration ---
 # Set to "true" to see detailed debugging output
 VERBOSE="false"
-SCRIPT_REVISION="3.7"
+SCRIPT_REVISION="4.0"
 CD_DEVICE="/dev/sr0"
 
 # --- Functions ---
@@ -149,7 +149,14 @@ if [ "$HTTP_STATUS" -eq 200 ] && [ -s /tmp/musicbrainz_response.json ] && [ "$(j
     RELEASE_COUNT=$(jq '.releases | length' /tmp/musicbrainz_response.json)
     SELECTED_INDEX=0
 
-    if [ "$RELEASE_COUNT" -gt 1 ]; then
+    if [ "$RELEASE_COUNT" -eq 1 ]; then
+        echo "Found one matching release:"
+        jq -r '.releases[0] | "\(.|."artist-credit"[0].name) - \(.title)"' /tmp/musicbrainz_response.json
+        read -p "Use this release? (y/n): " CONFIRM
+        if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+            METADATA_SOURCE="MusicBrainz"
+        fi
+    else # This handles RELEASE_COUNT > 1
         echo "Found multiple matching releases. Please choose the correct one:"
         echo "  0) None of these - Enter manually"
         jq -r '.releases[] | "\(.|."artist-credit"[0].name) - \(.title)"' /tmp/musicbrainz_response.json | nl -w2 -s'. '
@@ -166,8 +173,6 @@ if [ "$HTTP_STATUS" -eq 200 ] && [ -s /tmp/musicbrainz_response.json ] && [ "$(j
                 echo "Invalid selection. Please try again."
             fi
         done
-    else
-        METADATA_SOURCE="MusicBrainz"
     fi
 fi
 
@@ -304,7 +309,7 @@ CUE_FILE="$OUTPUT_DIR/$SAFE_ALBUM_TITLE.cue"
 if grep -q '^[[:space:]]*0\.' /tmp/cdparanoia_toc.txt; then
     echo "Hidden track (pre-gap audio) found. Ripping track 0..."
     HDA_FILE="$OUTPUT_DIR/00. Hidden Track.$EXTENSION"
-    cdparanoia -q -d "$CD_DEVICE" 0 - | flac - --best -o "$HDA_FILE"
+    cdparanoia -q -d "$CD_DEVICE" 0 - | flac -s --best -o "$HDA_FILE"
     if [ $? -eq 0 ]; then
         echo "Successfully ripped hidden track."
         echo "Hidden Track (Track 0): Ripped to $HDA_FILE" >> "$LOG_FILE"
@@ -347,28 +352,26 @@ for i in $(seq 1 $TRACK_COUNT); do
         flac)
             PICTURE_OPTION=""
             if [ -n "$COVER_ART_FILE" ]; then PICTURE_OPTION="--picture=$COVER_ART_FILE"; fi
-            cdparanoia -q -d "$CD_DEVICE" "$i" - 2>> "$LOG_FILE" | flac - --best --verify $PICTURE_OPTION -T "ARTIST=$ALBUM_ARTIST" -T "ALBUM=$ALBUM_TITLE" -T "TITLE=$TRACK_TITLE" -T "TRACKNUMBER=$i" -T "DATE=$YEAR" -T "GENRE=$GENRE" $COMPOSER_TAG -o "$OUTPUT_FILE"
+            cdparanoia -q -d "$CD_DEVICE" "$i" - 2>> "$LOG_FILE" | flac -s --best --verify $PICTURE_OPTION -T "ARTIST=$ALBUM_ARTIST" -T "ALBUM=$ALBUM_TITLE" -T "TITLE=$TRACK_TITLE" -T "TRACKNUMBER=$i" -T "DATE=$YEAR" -T "GENRE=$GENRE" $COMPOSER_TAG - -o "$OUTPUT_FILE"
             ;;
         wav)
             cdparanoia -q -d "$CD_DEVICE" "$i" "$OUTPUT_FILE" 2>> "$LOG_FILE"
             ;;
         mp3)
-            cdparanoia -q -d "$CD_DEVICE" "$i" - 2>> "$LOG_FILE" | lame -b 320 --add-id3v2 --tt "$TRACK_TITLE" --ta "$ALBUM_ARTIST" --tl "$ALBUM_TITLE" --ty "$YEAR" --tn "$i" --tg "$GENRE" --tc "$COMPOSER" - "$OUTPUT_FILE"
+            cdparanoia -q -d "$CD_DEVICE" "$i" - 2>> "$LOG_FILE" | lame -S -b 320 --add-id3v2 --tt "$TRACK_TITLE" --ta "$ALBUM_ARTIST" --tl "$ALBUM_TITLE" --ty "$YEAR" --tn "$i" --tg "$GENRE" --tc "$COMPOSER" - "$OUTPUT_FILE"
             ;;
         ogg)
-            cdparanoia -q -d "$CD_DEVICE" "$i" - 2>> "$LOG_FILE" | oggenc -q 10 -a "$ALBUM_ARTIST" -l "$ALBUM_TITLE" -t "$TRACK_TITLE" -N "$i" -d "$YEAR" -G "$GENRE" -C "COMPOSER=$COMPOSER" -o "$OUTPUT_FILE"
+            cdparanoia -q -d "$CD_DEVICE" "$i" - 2>> "$LOG_FILE" | oggenc -Q -q 10 -a "$ALBUM_ARTIST" -l "$ALBUM_TITLE" -t "$TRACK_TITLE" -N "$i" -d "$YEAR" -G "$GENRE" -C "COMPOSER=$COMPOSER" -o "$OUTPUT_FILE" -
             ;;
     esac
 
     if [ $? -eq 0 ]; then
-        echo "Successfully ripped and encoded Track $i."
         SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
         echo "Track $i ('$TRACK_TITLE'): OK" >> "$LOG_FILE"
     else
         echo "Warning: There was an issue ripping or encoding Track $i."
         echo "Track $i ('$TRACK_TITLE'): FAILED" >> "$LOG_FILE"
     fi
-    echo
 done
 
 # --- Post-Processing ---
@@ -407,4 +410,5 @@ echo "Ejecting disc..."
 eject "$CD_DEVICE"
 
 exit 0
+
 
