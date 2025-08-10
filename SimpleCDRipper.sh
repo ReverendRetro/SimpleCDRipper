@@ -10,7 +10,7 @@
 #                and lame/oggenc for MP3/OGG.
 #        AUTHOR: ReverendRetro
 #       CREATED: 2025-08-10
-#      REVISION: 3.5
+#      REVISION: 3.6
 #==============================================================================
 
 # Ensure CD_DEVICE is what your CD drive is
@@ -18,7 +18,7 @@
 # --- Configuration ---
 # Set to "true" to see detailed debugging output
 VERBOSE="false"
-SCRIPT_REVISION="3.5"
+SCRIPT_REVISION="3.6"
 CD_DEVICE="/dev/sr0"
 
 # --- Functions ---
@@ -141,6 +141,7 @@ SUCCESS_COUNT=0
 COVER_ART_FILE=""
 COVER_ART_STATUS="No"
 GENRE=""
+DISC_SUBDIR=""
 
 # Check if the API call was successful and found any releases
 if [ "$HTTP_STATUS" -eq 200 ] && [ -s /tmp/musicbrainz_response.json ] && [ "$(jq '.releases | length' /tmp/musicbrainz_response.json 2>/dev/null)" -gt 0 ]; then
@@ -208,11 +209,9 @@ if [ "$HTTP_STATUS" -eq 200 ] && [ -s /tmp/musicbrainz_response.json ] && [ "$(j
     declare -a TRACK_TITLES
     declare -a COMPOSERS
     for i in $(seq 0 $((TRACK_COUNT - 1))); do
-        # Correctly get the title from the track itself, not the nested recording
         title=$(jq -r --argjson idx "$SELECTED_INDEX" --argjson i "$i" '.releases[$idx].media[0].tracks[$i].title' /tmp/musicbrainz_response.json)
         TRACK_TITLES+=("$title")
         
-        # Safely find composer from relations using '?' to prevent errors on nulls
         composer=$(jq -r --argjson idx "$SELECTED_INDEX" --argjson i "$i" '[.releases[$idx].media[0].tracks[$i].recording.relations[]? | select(.type == "composer") | .artist.name] | first // ""' /tmp/musicbrainz_response.json)
         COMPOSERS+=("$composer")
     done
@@ -223,6 +222,17 @@ else
     read -p "Album Title: " ALBUM_TITLE
     read -p "Year: " YEAR
     read -p "Genre: " GENRE
+
+    # --- Multi-disc Handling for Manual Entry ---
+    read -p "Is this part of a multi-disc set? (y/n): " IS_MULTI
+    if [[ "$IS_MULTI" =~ ^[Yy]$ ]]; then
+        read -p "Please enter the disc number: " DISC_NUMBER
+        if [[ "$DISC_NUMBER" =~ ^[0-9]+$ ]]; then
+            DISC_SUBDIR="Disc $DISC_NUMBER"
+        else
+            echo "Invalid number, proceeding without disc subdirectory."
+        fi
+    fi
 
     declare -a TRACK_TITLES
     for i in $(seq 1 $TRACK_COUNT_ACTUAL); do
@@ -237,7 +247,13 @@ fi
 SAFE_ALBUM_ARTIST=$(echo "$ALBUM_ARTIST" | sed 's/\//_/g')
 SAFE_ALBUM_TITLE=$(echo "$ALBUM_TITLE" | sed 's/\//_/g')
 
-OUTPUT_DIR="$SAVE_DIR/$SAFE_ALBUM_ARTIST/$SAFE_ALBUM_TITLE"
+# Modify OUTPUT_DIR to include disc subdirectory if it exists
+if [ -n "$DISC_SUBDIR" ]; then
+    OUTPUT_DIR="$SAVE_DIR/$SAFE_ALBUM_ARTIST/$SAFE_ALBUM_TITLE/$DISC_SUBDIR"
+else
+    OUTPUT_DIR="$SAVE_DIR/$SAFE_ALBUM_ARTIST/$SAFE_ALBUM_TITLE"
+fi
+
 echo "Creating output directory: $OUTPUT_DIR"
 mkdir -p "$OUTPUT_DIR" || error_exit "Could not create output directory."
 
@@ -247,6 +263,7 @@ CUE_FILE="$OUTPUT_DIR/$SAFE_ALBUM_TITLE.cue"
 
 {
     echo "CD Rip Log for: $ALBUM_ARTIST - $ALBUM_TITLE"
+    if [ -n "$DISC_SUBDIR" ]; then echo "Disc: ${DISC_SUBDIR##* }"; fi
     echo "Rip started on: $(date)"
     echo "Ripped with script version: $SCRIPT_REVISION"
     echo "Output Format: ${ENCODER^^}"
@@ -381,3 +398,4 @@ echo "Ejecting disc..."
 eject "$CD_DEVICE"
 
 exit 0
+
