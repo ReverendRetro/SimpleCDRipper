@@ -10,16 +10,13 @@
 #                and lame/oggenc for MP3/OGG.
 #        AUTHOR: ReverendRetro
 #       CREATED: 2025-08-10
-#      REVISION: 4.0
+#      REVISION: 4.3
 #==============================================================================
-
-# Ensure CD_DEVICE is what your CD drive is
 
 # --- Configuration ---
 # Set to "true" to see detailed debugging output
 VERBOSE="false"
-SCRIPT_REVISION="4.0"
-CD_DEVICE="/dev/sr0"
+SCRIPT_REVISION="4.3"
 
 # --- Functions ---
 
@@ -56,6 +53,35 @@ for cmd in cdparanoia curl jq md5sum eject; do
     fi
 done
 echo "Core dependencies are satisfied."
+echo
+
+# --- Auto-detect CD Drive ---
+echo "Scanning for CD drives with a disc..."
+DRIVES=($(ls /dev/sr* 2>/dev/null))
+VALID_DRIVES=()
+for drive in "${DRIVES[@]}"; do
+    # Check if a disc is present and readable by cdparanoia
+    if cdparanoia -Q -d "$drive" &>/dev/null; then
+        VALID_DRIVES+=("$drive")
+    fi
+done
+
+if [ ${#VALID_DRIVES[@]} -eq 0 ]; then
+    error_exit "No readable audio CD found in any drive. Please insert a disc."
+elif [ ${#VALID_DRIVES[@]} -eq 1 ]; then
+    CD_DEVICE=${VALID_DRIVES[0]}
+    echo "Found CD in: $CD_DEVICE"
+else
+    echo "Found discs in multiple drives. Please choose which one to rip:"
+    select drive in "${VALID_DRIVES[@]}"; do
+        if [ -n "$drive" ]; then
+            CD_DEVICE=$drive
+            break
+        else
+            echo "Invalid selection."
+        fi
+    done
+fi
 echo
 
 # --- Choose Output Format ---
@@ -297,10 +323,17 @@ CUE_FILE="$OUTPUT_DIR/$SAFE_ALBUM_TITLE.cue"
         ogg) oggenc --version | head -n 1 ;;
         wav) echo "Encoder: WAV (native cdparanoia output)" ;;
     esac
+    echo ""
+    echo "--- Drive Information ---"
     echo "Ripping Device: $CD_DEVICE"
+    # Extract just the drive model from the initial TOC check
+    DRIVE_MODEL=$(grep 'CDROM model' /tmp/cdparanoia_toc.txt | sed 's/CDROM model sensed sensed://g' | xargs)
+    if [ -n "$DRIVE_MODEL" ]; then
+        echo "Drive Model: $DRIVE_MODEL"
+    fi
     echo "=============================================================================="
     echo ""
-    echo "--- cdparanoia Drive Analysis and Table of Contents ---"
+    echo "--- cdparanoia Table of Contents ---"
     cat /tmp/cdparanoia_toc.txt
     echo "------------------------------------------------------------------------------"
 } > "$LOG_FILE"
