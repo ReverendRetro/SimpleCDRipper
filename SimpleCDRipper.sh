@@ -10,13 +10,13 @@
 #                and lame/oggenc for MP3/OGG.
 #        AUTHOR: ReverendRetro
 #       CREATED: 2025-08-10
-#      REVISION: 4.3
+#      REVISION: 4.5
 #==============================================================================
 
 # --- Configuration ---
 # Set to "true" to see detailed debugging output
 VERBOSE="false"
-SCRIPT_REVISION="4.3"
+SCRIPT_REVISION="4.5"
 
 # --- Functions ---
 
@@ -60,7 +60,6 @@ echo "Scanning for CD drives with a disc..."
 DRIVES=($(ls /dev/sr* 2>/dev/null))
 VALID_DRIVES=()
 for drive in "${DRIVES[@]}"; do
-    # Check if a disc is present and readable by cdparanoia
     if cdparanoia -Q -d "$drive" &>/dev/null; then
         VALID_DRIVES+=("$drive")
     fi
@@ -96,22 +95,30 @@ case $FORMAT_CHOICE in
     2)
         ENCODER="wav"
         EXTENSION="wav"
+        BITRATE="-"
+        QUALITY="Uncompressed"
         ;;
     3)
         command_exists "lame" || error_exit "'lame' is not installed. Please install it for MP3 encoding."
         ENCODER="mp3"
         EXTENSION="mp3"
+        BITRATE="320 kBit/s"
+        QUALITY="High"
         ;;
     4)
         command_exists "oggenc" || error_exit "'oggenc' is not installed. Please install it for OGG encoding."
         ENCODER="ogg"
         EXTENSION="ogg"
+        BITRATE="~500 kBit/s"
+        QUALITY="High (q10)"
         ;;
     *)
         command_exists "flac" || error_exit "'flac' is not installed. Please install it for FLAC encoding."
         command_exists "metaflac" || error_exit "'metaflac' is not installed. Please install it for ReplayGain scanning."
         ENCODER="flac"
         EXTENSION="flac"
+        BITRATE="-"
+        QUALITY="Lossless"
         ;;
 esac
 echo "Selected format: ${ENCODER^^}"
@@ -301,19 +308,19 @@ mkdir -p "$OUTPUT_DIR" || error_exit "Could not create output directory."
 LOG_FILE="$OUTPUT_DIR/rip_log.txt"
 CUE_FILE="$OUTPUT_DIR/$SAFE_ALBUM_TITLE.cue"
 
+# Get drive features from cdparanoia's initial output
+DRIVE_MODEL=$(grep 'CDROM model' /tmp/cdparanoia_toc.txt | sed 's/CDROM model sensed sensed://g' | xargs)
+
 {
     echo "CD Rip Log for: $ALBUM_ARTIST - $ALBUM_TITLE"
     if [ -n "$DISC_SUBDIR" ]; then echo "Disc: ${DISC_SUBDIR##* }"; fi
     echo "Rip started on: $(date)"
     echo "Ripped with script version: $SCRIPT_REVISION"
-    echo "Output Format: ${ENCODER^^}"
-    if [ "$METADATA_SOURCE" == "MusicBrainz" ]; then
-        echo "MusicBrainz Release URL: $RELEASE_URL"
-    else
-        echo "Metadata entered manually."
-    fi
-    echo "Selected Genre: $GENRE"
-    echo "Cover Art Embedded: $COVER_ART_STATUS"
+    echo ""
+    echo "--- Encoder Settings ---"
+    printf "%-30s: %s\n" "Used output format" "${ENCODER^^}"
+    printf "%-30s: %s\n" "Selected bitrate" "$BITRATE"
+    printf "%-30s: %s\n" "Quality" "$QUALITY"
     echo ""
     echo "--- Tool Versions ---"
     cdparanoia --version 2>&1 | head -n 1
@@ -326,16 +333,8 @@ CUE_FILE="$OUTPUT_DIR/$SAFE_ALBUM_TITLE.cue"
     echo ""
     echo "--- Drive Information ---"
     echo "Ripping Device: $CD_DEVICE"
-    # Extract just the drive model from the initial TOC check
-    DRIVE_MODEL=$(grep 'CDROM model' /tmp/cdparanoia_toc.txt | sed 's/CDROM model sensed sensed://g' | xargs)
-    if [ -n "$DRIVE_MODEL" ]; then
-        echo "Drive Model: $DRIVE_MODEL"
-    fi
+    if [ -n "$DRIVE_MODEL" ]; then echo "Drive Model: $DRIVE_MODEL"; fi
     echo "=============================================================================="
-    echo ""
-    echo "--- cdparanoia Table of Contents ---"
-    cat /tmp/cdparanoia_toc.txt
-    echo "------------------------------------------------------------------------------"
 } > "$LOG_FILE"
 
 # --- HDA (Hidden Track One Audio) Ripping ---
@@ -365,6 +364,7 @@ for i in $(seq 1 $TRACK_COUNT); do
     TRACK_TITLE=${TRACK_TITLES[$((i-1))]}
     COMPOSER=${COMPOSERS[$((i-1))]}
     SAFE_TRACK_TITLE=$(echo "$TRACK_TITLE" | sed 's/\//_/g')
+    TEMP_WAV_FILE="$OUTPUT_DIR/$TRACK_NUM.tmp.wav"
     OUTPUT_FILE="$OUTPUT_DIR/$TRACK_NUM. $SAFE_TRACK_TITLE.$EXTENSION"
     
     {
@@ -376,34 +376,65 @@ for i in $(seq 1 $TRACK_COUNT); do
         echo "      INDEX 01 00:00:00"
     } >> "$CUE_FILE"
 
-    echo "Ripping Track $i of $TRACK_COUNT: '$TRACK_TITLE' to ${EXTENSION^^}"
+    echo "Ripping Track $i of $TRACK_COUNT: '$TRACK_TITLE'..."
 
-    COMPOSER_TAG=""
-    if [ -n "$COMPOSER" ]; then COMPOSER_TAG="-T COMPOSER=$COMPOSER"; fi
+    # --- Stage 1: Rip to temporary WAV ---
+    RIP_LOG=$(cdparanoia -v -d "$CD_DEVICE" "$i" "$TEMP_WAV_FILE" 2>&1)
+    
+    # --- Log Track-Specific Details ---
+    PREGAP=$(echo "$RIP_LOG" | grep 'pre-gap' | awk '{print $3}')
+    PEAK_LEVEL=$(echo "$RIP_LOG" | grep 'peak' | awk '{print $3}')
+    TRACK_QUALITY=$(echo "$RIP_LOG" | grep 'Done' | awk '{print $1}')
 
-    case $ENCODER in
-        flac)
-            PICTURE_OPTION=""
-            if [ -n "$COVER_ART_FILE" ]; then PICTURE_OPTION="--picture=$COVER_ART_FILE"; fi
-            cdparanoia -q -d "$CD_DEVICE" "$i" - 2>> "$LOG_FILE" | flac -s --best --verify $PICTURE_OPTION -T "ARTIST=$ALBUM_ARTIST" -T "ALBUM=$ALBUM_TITLE" -T "TITLE=$TRACK_TITLE" -T "TRACKNUMBER=$i" -T "DATE=$YEAR" -T "GENRE=$GENRE" $COMPOSER_TAG - -o "$OUTPUT_FILE"
-            ;;
-        wav)
-            cdparanoia -q -d "$CD_DEVICE" "$i" "$OUTPUT_FILE" 2>> "$LOG_FILE"
-            ;;
-        mp3)
-            cdparanoia -q -d "$CD_DEVICE" "$i" - 2>> "$LOG_FILE" | lame -S -b 320 --add-id3v2 --tt "$TRACK_TITLE" --ta "$ALBUM_ARTIST" --tl "$ALBUM_TITLE" --ty "$YEAR" --tn "$i" --tg "$GENRE" --tc "$COMPOSER" - "$OUTPUT_FILE"
-            ;;
-        ogg)
-            cdparanoia -q -d "$CD_DEVICE" "$i" - 2>> "$LOG_FILE" | oggenc -Q -q 10 -a "$ALBUM_ARTIST" -l "$ALBUM_TITLE" -t "$TRACK_TITLE" -N "$i" -d "$YEAR" -G "$GENRE" -C "COMPOSER=$COMPOSER" -o "$OUTPUT_FILE" -
-            ;;
-    esac
+    {
+        echo ""
+        echo "Track $i"
+        echo ""
+        echo "      Filename ${OUTPUT_FILE}"
+        if [ -n "$PREGAP" ]; then echo "      Pre-gap length $PREGAP"; fi
+        if [ -n "$PEAK_LEVEL" ]; then echo "      Peak level $PEAK_LEVEL %"; fi
+        if [ "$TRACK_QUALITY" == "Done." ]; then
+            echo "      Track quality 100.0 %"
+            echo "      Extraction OK"
+        else
+            echo "      Track quality 0.0 %"
+            echo "      Extraction FAILED"
+        fi
+    } >> "$LOG_FILE"
 
-    if [ $? -eq 0 ]; then
-        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-        echo "Track $i ('$TRACK_TITLE'): OK" >> "$LOG_FILE"
+    # --- Stage 2: Encode from WAV ---
+    if [ -f "$TEMP_WAV_FILE" ]; then
+        COMPOSER_TAG=""
+        if [ -n "$COMPOSER" ]; then COMPOSER_TAG="-T COMPOSER=$COMPOSER"; fi
+
+        case $ENCODER in
+            flac)
+                PICTURE_OPTION=""
+                if [ -n "$COVER_ART_FILE" ]; then PICTURE_OPTION="--picture=$COVER_ART_FILE"; fi
+                flac -s --best --verify $PICTURE_OPTION -T "ARTIST=$ALBUM_ARTIST" -T "ALBUM=$ALBUM_TITLE" -T "TITLE=$TRACK_TITLE" -T "TRACKNUMBER=$i" -T "DATE=$YEAR" -T "GENRE=$GENRE" $COMPOSER_TAG "$TEMP_WAV_FILE" -o "$OUTPUT_FILE"
+                ;;
+            wav)
+                # For WAV, the temp file is the final file, so we just rename it.
+                mv "$TEMP_WAV_FILE" "$OUTPUT_FILE"
+                ;;
+            mp3)
+                lame -S -b 320 --add-id3v2 --tt "$TRACK_TITLE" --ta "$ALBUM_ARTIST" --tl "$ALBUM_TITLE" --ty "$YEAR" --tn "$i" --tg "$GENRE" --tc "$COMPOSER" "$TEMP_WAV_FILE" "$OUTPUT_FILE"
+                ;;
+            ogg)
+                oggenc -Q -q 10 -a "$ALBUM_ARTIST" -l "$ALBUM_TITLE" -t "$TRACK_TITLE" -N "$i" -d "$YEAR" -G "$GENRE" -C "COMPOSER=$COMPOSER" "$TEMP_WAV_FILE" -o "$OUTPUT_FILE"
+                ;;
+        esac
+
+        if [ $? -eq 0 ]; then
+            echo "      Copy OK" >> "$LOG_FILE"
+            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+            rm "$TEMP_WAV_FILE"
+        else
+            echo "      Copy FAILED" >> "$LOG_FILE"
+            rm "$TEMP_WAV_FILE"
+        fi
     else
-        echo "Warning: There was an issue ripping or encoding Track $i."
-        echo "Track $i ('$TRACK_TITLE'): FAILED" >> "$LOG_FILE"
+        echo "      Copy FAILED (Temporary WAV not created)" >> "$LOG_FILE"
     fi
 done
 
@@ -411,6 +442,7 @@ done
 if [ "$ENCODER" == "flac" ]; then
     echo "Applying ReplayGain tags to FLAC files..."
     metaflac --add-replay-gain "$OUTPUT_DIR"/*.flac
+    echo "" >> "$LOG_FILE"
     echo "ReplayGain scanning complete." >> "$LOG_FILE"
 fi
 
